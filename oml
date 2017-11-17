@@ -1,0 +1,258 @@
+#!/usr/local/python279/bin/python
+
+import re
+import os
+import time
+import socket
+import fcntl
+import struct
+import sys
+import json
+import getpass
+from optparse import OptionParser
+import logging
+from collections import namedtuple
+from ansible.parsing.dataloader import DataLoader
+from ansible.vars import VariableManager
+from ansible.inventory import Inventory
+from ansible.playbook.play import Play
+from ansible.executor.task_queue_manager import TaskQueueManager
+from ansible.plugins.callback import CallbackBase
+
+
+class ResultCallback(CallbackBase):
+    """A sample callback plugin used for performing an action as results come in
+
+    If you want to collect all results into a single object for processing at
+    the end of the execution, look into utilizing the ``json`` callback plugin
+    or writing your own custom callback plugin
+    """
+    def v2_runner_on_ok(self, result, **kwargs):
+        """Print a json representation of the result
+
+        This method could store the result in an instance attribute for retrieval later
+        """
+        host = result._host
+        print(json.dumps({host.name: result._result}, indent=4))
+
+class MyPlayBook(object):
+
+    def __init__(self, sudo_src_host=None, sudo_dest_host=None, sudo_user=None, sudo_cmd=None, forks=10, template=None, dest_path='/etc/sudoers.d/'):
+        self.sudo_src_host = sudo_src_host
+        self.sudo_dest_host = sudo_dest_host
+        self.sudo_cmd = sudo_cmd
+        self.sudo_user = sudo_user
+        self.timestamp = str(time.time()).replace('.','')
+        self.sudo_play_name = "%s_%s_%s" % (self.sudo_src_host, self.sudo_user, self.timestamp)
+        self.forks = forks
+        self.sudo_path = dest_path
+        #self.sudo_path = '/tmp/'
+        #self.sudo_temp = '/etc/ansible/template/sudo/sudo.temp'
+        self.sudo_temp = template
+        Options = namedtuple('Options',
+                                ['subset',
+                                 'ask_pass',
+                                 'listtags',
+                                 'become_user',
+                                 'sudo',
+                                 'private_key_file',
+                                 'syntax',
+                                 'skip_tags',
+                                 'diff',
+                                 'sftp_extra_args',
+                                 'check',
+                                 'force_handlers',
+                                 'remote_user',
+                                 'become_method',
+                                 'vault_password_file',
+                                 'listtasks',
+                                 'output_file',
+                                 'ask_su_pass',
+                                 'new_vault_password_file',
+                                 'forks',
+                                 'listhosts',
+                                 'ssh_extra_args',
+                                 'tags',
+                                 'become_ask_pass',
+                                 'start_at_task',
+                                 'flush_cache',
+                                 'step',
+                                 'become',
+                                 'su_user',
+                                 'ask_sudo_pass',
+                                 'verbosity',
+                                 'su',
+                                 'ssh_common_args',
+                                 'connection',
+                                 'ask_vault_pass',
+                                 'timeout',
+                                 'module_path',
+                                 'sudo_user',
+                                 'scp_extra_args'
+                                ]
+                            )
+
+        '''
+        initialize needed objects
+        '''
+        self.options = Options(
+                                subset=None,
+                                ask_pass=False,
+                                listtags=None,
+                                become_user=u'root',
+                                sudo=False,
+                                private_key_file=None,
+                                syntax=None,
+                                skip_tags=[],
+                                diff=False,
+                                sftp_extra_args='',
+                                check=False,
+                                force_handlers=False,
+                                remote_user=None,
+                                become_method=u'sudo',
+                                vault_password_file=None,
+                                listtasks=None,
+                                output_file=None,
+                                ask_su_pass=False,
+                                new_vault_password_file=None,
+                                forks=self.forks,
+                                listhosts=None,
+                                ssh_extra_args='',
+                                tags=[u'all'],
+                                become_ask_pass=False,
+                                start_at_task=None,
+                                flush_cache=None,
+                                step=None,
+                                become=False,
+                                su_user=None,
+                                ask_sudo_pass=False,
+                                verbosity=0,
+                                su=False,
+                                ssh_common_args='',
+                                connection=u'smart',
+                                ask_vault_pass=False,
+                                timeout=10,
+                                module_path=None,
+                                sudo_user=None,
+                                scp_extra_args=''
+                              )
+
+        self.loader = DataLoader()
+        self.passwords = dict(vault_pass='123')
+
+        # Instantiate our ResultCallback for handling results as they come in
+        self.results_callback = ResultCallback()
+
+        '''
+        # create inventory and pass to var manager
+        '''
+        self.variable_manager = VariableManager()
+        self.inventory = Inventory(loader=self.loader, variable_manager=self.variable_manager, host_list='../../ansible/gen_inventory_to_json.py')
+        #print "%s\n%s\n%s\n%s\n"%(self.sudo_src_host, self.sudo_user, self.sudo_cmd, self.sudo_play_name)
+
+
+    def my_play(self):
+        '''
+        create play with tasks
+        '''
+        self.play_source =  dict(
+                name = "Ansible Sudo Play",
+                #hosts = 'localhost',
+                #hosts = 'mytest',
+                hosts = self.sudo_dest_host,
+                gather_facts = 'no',
+                vars = {'adopuser':self.sudo_user, 'adopcmd':self.sudo_cmd},
+                tasks = [
+                    #dict(action=dict(module='shell', args='uptime'), register='shell_out', remote_user='root')
+                    dict(action=dict(module='template', src=self.sudo_temp, dest='%s%s'%(self.sudo_path, self.sudo_play_name)), register='shell_out', remote_user='root')
+                    #dict(action=dict(module='debug', args=dict(msg='{{shell_out.stdout}}')))
+                 ]
+            )
+        self.play = Play().load(self.play_source, variable_manager=self.variable_manager, loader=self.loader)
+        
+        # actually run it
+        self.tqm = None
+        try:
+            self.tqm = TaskQueueManager(
+                      inventory=self.inventory,
+                      variable_manager=self.variable_manager,
+                      loader=self.loader,
+                      options=self.options,
+                      passwords=self.passwords,
+                      stdout_callback=self.results_callback,  # Use our custom callback instead of the ``default`` callback plugin
+                  )
+            result = self.tqm.run(self.play)
+        finally:
+            if self.tqm is not None:
+                self.tqm.cleanup()
+
+
+
+def get_ip():
+    netinterface_list = []
+    ipv4_list = []
+    netfp = open('/proc/net/dev')
+    for line in netfp.readlines()[2:]:
+        netinterface_list.append(line.split(':')[0].strip(' '))
+    netfp.close()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for interface in netinterface_list:
+        ipv4_list.append(socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', interface[:15]))[20:24]))
+    #return socket.inet_ntoa(fcntl.ioctl(
+    #                                    s.fileno(),
+    #                                    0x8915,  # SIOCGIFADDR
+    #                                    struct.pack('256s', ifname[:15])
+    #                                   )[20:24])
+    return ipv4_list
+
+if __name__ == '__main__':
+    ip_list = get_ip()
+    user = getpass.getuser()
+    reip = re.compile(r'^((?:(2[0-4]\d)|(25[0-5])|([01]?\d\d?))\.){3}(?:(2[0-4]\d)|(255[0-5])|([01]?\d\d?))$')
+
+    usage='''xxxxxxxxx'''
+    default='''
+        Configure the predefined sudo permissions, as follows:
+        yum
+    '''
+    parser = OptionParser(usage=usage)
+    parser.add_option('-c', '--command', type='string', dest='cmd', help='')
+    parser.add_option('-d', '--default', action='store_true', dest='default', help=default)
+    parser.add_option('-t', '--to', type='string', dest='dest_host', help='')
+    parser.add_option('-u', '--user', type='string', dest='user', help='')
+    (options, args) = parser.parse_args()
+
+    if options.cmd is None and options.dest_host is None and options.user is None and options.default is None:
+        logging.warning('Need three param')
+        sys.exit(1)
+    if options.dest_host:
+        if options.dest_host.find(','):
+            for ip in options.dest_host.split(','):
+                if not reip.match(ip):
+                    logging.warning('Illegal IP[%s]'%(ip,))
+                    sys.exit(1)
+        else:
+            if not reip.match(options.dest_host):
+                logging.warning('Illegal IP[%s]'%(options.dest_host,))
+                sys.exit(1)
+        if options.dest_host in ip_list:
+            logging.warning('The target host cannot be the same as the source host')
+            sys.exit(1)
+    if (options.default and options.cmd) or (options.default and options.user):
+        logging.warning('-d is not use with -u or -t param')
+        sys.exit(1)
+    elif options.default and options.dest_host:
+        logging.info('sssssssss')
+        template = '/etc/ansible/template/sudo/default_sudo.temp'
+        options.user='default'
+    else:
+        template = '/etc/ansible/template/sudo/sudo.temp'
+        if not os.access(options.cmd, os.F_OK) or not os.access(options.cmd, os.X_OK):
+            logging.warning('The comand %s is not exist or not execute'%(options.cmd,))
+            sys.exit(1)
+        if options.dest_host == 'all':
+            logging.warning('Forbidden use all')
+            sys.exit(1)
+    a=MyPlayBook(sudo_src_host=src_host, sudo_dest_host=options.dest_host, sudo_user=options.user, sudo_cmd=options.cmd, template=template)
+    a.my_play()
+

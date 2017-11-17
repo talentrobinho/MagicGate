@@ -1,0 +1,215 @@
+#!/usr/local/python279/bin/python
+import re
+import sys
+import getopt
+import paramiko
+#import interactive
+import getpass
+import socket
+import sys
+from paramiko.py3compat import u
+import curses
+
+
+log_file = "/var/log/ssh.log"
+default_port = 22
+default_su_user = "root"
+default_op_user = "op_biz"
+default_de_user = "deve"
+default_gu_user = "guest"
+default_op_password = "123"
+default_de_password = "123"
+default_gu_password = "123"
+
+
+
+def Usage():
+    print "test param"
+
+
+def query_machine():
+    try:
+        pass
+    except Exception:
+        pass
+
+def is_access(user, ip):
+    flag = False
+    #query_result = query_machine(ip)
+    query_result = ['lizhansheng', 'duanxiudong']
+    if user in query_result:
+        print "ttttt"
+        flag = True
+    return flag
+ 
+def is_online_servie(ip):
+    flag = False
+    if ip in ['10.134.39.135']:
+        flag = True
+    return flag
+
+def is_control(ip):
+    flag = False
+    if ip in ['10.134.56.83']:
+        flag = True
+    return flag
+
+def is_machine_admin(user, ip):
+    return is_access(user, ip)
+
+def is_service_admin(user, ip):
+    #return is_access(user, ip)
+    return False
+
+   
+
+'''
+    windows does not have termios...
+'''
+try:
+    import termios
+    import tty
+    has_termios = True
+except ImportError:
+    has_termios = False
+
+
+def interactive_shell(chan):
+    if has_termios:
+        posix_shell(chan)
+    else:
+        windows_shell(chan)
+
+
+def posix_shell(chan):
+    import select
+    
+    oldtty = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        tty.setcbreak(sys.stdin.fileno())
+        chan.settimeout(0.0)
+
+        while True:
+            r, w, e = select.select([chan, sys.stdin], [], [])
+            if chan in r:
+                try:
+                    x = u(chan.recv(1024))
+                    if len(x) == 0:
+                        sys.stdout.write('\r\n*** EOF\r\n')
+                        break
+                    sys.stdout.write(x)
+                    sys.stdout.flush()
+                except socket.timeout:
+                    pass
+            if sys.stdin in r:
+                x = sys.stdin.read(1)
+                if len(x) == 0:
+                    break
+                chan.send(x)
+
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
+
+
+def conn(ip, user, passwd):
+    paramiko.util.log_to_file(log_file)
+    ssh=paramiko.SSHClient()
+    ssh.load_system_host_keys()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    #curses.setupterm()
+    try:
+        ssh.connect(ip, port=default_port, username=user, password=passwd, compress=True)
+        #channel=ssh.invoke_shell(width=curses.tigetnum('cols'), height=curses.tigetnum('lines'))
+        channel=ssh.invoke_shell(width=176, height=53)
+    except paramiko.ssh_exception.BadHostKeyException:
+        print u"The server's host key could not be verified"
+        sys.exit(1)
+    except paramiko.ssh_exception.AuthenticationException:
+        print u"Authentication failed"
+        sys.exit(1)
+    except paramiko.ssh_exception.SSHException:
+        print u"Other error connecting or establishing an SSH session"
+        sys.exit(1)
+    except Exception:
+        print u"A socket error occurred while connecting"
+        sys.exit(1)
+    interactive_shell(channel)
+    channel.close()
+    ssh.close()
+
+if __name__ == '__main__':
+    '''
+        Analytical parameters
+    '''
+    if len(sys.argv) == 2:
+        hostinfo=sys.argv[1]
+        hostinfo_list=[]
+        ip=''
+        reip = re.compile(r'^((?:(2[0-4]\d)|(25[0-5])|([01]?\d\d?))\.){3}(?:(2[0-4]\d)|(255[0-5])|([01]?\d\d?))$')
+        if "@" in hostinfo:
+            hostinfo_list=hostinfo.split('@')
+            #user=hostinfo_list[0]
+            user=getpass.getuser()
+            ip=hostinfo_list[1]
+        else:
+            user=getpass.getuser()
+            ip=sys.argv[1]
+    else:
+        Usage()
+        sys.exit(1)
+
+    '''
+        Determine if IP is legal
+        print reip.match(ip).group(0)
+    '''
+    if not reip.match(ip):
+        print "Illegal IP"
+        sys.exit(1)
+
+    '''
+        To determine the user
+    '''
+    if user == default_su_user or user == default_op_user or user == default_de_user:
+        print "Illegal User %s"%(user,)
+        sys.exit(1)
+
+    '''
+        Determines whether the user has access to IP
+    '''
+    deny = 0
+    if is_online_servie(ip):
+        if is_machine_admin(user, ip):
+            user = default_op_user
+            passwd = default_op_password
+        elif is_service_admin(user, ip):
+            user = default_gu_user
+            passwd = default_gu_password
+        else:
+            deny = 1
+    elif is_control(ip):
+        if is_machine_admin(user, ip) or is_service_admin(user, ip):
+            user = default_op_user
+            passwd = default_op_password
+        else:
+            deny = 1
+    else:
+        if is_machine_admin(user, ip):
+            an = input_raw("Are you going to log in with deve users? (y/n)")
+            if an == 'y':
+                user = default_de_user
+                passwd = default_de_password
+        elif is_service_admin(user, ip):
+            pass
+        else:
+            deny = 1
+        
+    if deny:
+        print "You have no right to access this IP, please contact the machine administrator."
+        sys.exit(1)
+
+    '''
+        Log in IP
+        print "ip: %s\nuser: %s\npasswd: %s"%(ip, user, passwd)
+    '''
+    conn(ip, user, passwd)
