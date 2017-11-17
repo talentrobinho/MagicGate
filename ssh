@@ -21,7 +21,7 @@ log_file = "/var/log/ssh.log"
 default_port = 22
 default_su_user = "root"
 default_op_user = "op_biz"
-default_de_user = "manager"
+default_ma_user = "manager"
 default_gu_user = "guest"
 default_op_password = "123"
 default_de_password = "123"
@@ -71,7 +71,7 @@ def is_access(user, machine_info, iflag):
 def is_online_servie(m_info):
     flag = False
     is_online = m_info['machine_list'][0]['status']
-    if is_online.find('online') or is_online.find('Online'):
+    if is_online.find('online') > -1 or is_online.find('Online') > -1:
         flag = True
     return flag
 
@@ -208,9 +208,11 @@ if __name__ == '__main__':
             hostinfo_list=hostinfo.split('@')
             user=hostinfo_list[0]
             #user=getpass.getuser()
+            realuser=getpass.getuser()
             ip=hostinfo_list[1]
         else:
             user=getpass.getuser()
+            realuser=getpass.getuser()
             ip=sys.argv[1]
     else:
         Usage()
@@ -227,8 +229,9 @@ if __name__ == '__main__':
     '''
         To determine the user
     '''
-    if user == default_su_user or user == default_op_user or user == default_de_user:
-        print "Illegal User %s"%(user,)
+    #if user == default_su_user or user == default_op_user or user == default_ma_user:
+    if user == default_su_user or user == default_op_user:
+        print "Invalid User"
         sys.exit(1)
 
     '''
@@ -236,37 +239,39 @@ if __name__ == '__main__':
     '''
     deny = 0
     query_machine_info = query_machine(ip)
-    is_ma = is_machine_admin(user, query_machine_info)
+    is_ma = is_machine_admin(realuser, query_machine_info)
     is_co = is_control(query_machine_info)
     is_on = is_online_servie(query_machine_info)
-    is_sa = is_service_admin(user, query_machine_info)
+    is_sa = is_service_admin(realuser, query_machine_info)
+    is_us = is_user(realuser, query_machine_info)
 
     if is_on:
+        if user != realuser or user != default_op_user:
+            print "Invalid user"
+            sys.exit(1)
         if is_ma:
             user = default_op_user
             passwd = default_op_password
-        elif is_sa:
+        elif is_sa or is_us:
             user = default_gu_user
             passwd = default_gu_password
         else:
             deny = 1
-    elif is_co:
-        if is_ma or is_sa:
-            user = default_op_user
-            passwd = default_op_password
-        else:
-            deny = 1
     else:
-        if is_ma:
-            an = input_raw("Are you going to log in with deve users? (y/n)")
-            if an == 'y':
-                user = default_de_user
-                passwd = default_de_password
-        elif is_sa:
-            pass
-        else:
+        if not is_ma and user == default_ma_user:
+            print "You have no right to access this IP for %s users"%(default_ma_user,)
+            sys.exit(1)
+        if not is_us or not is_ma or not is_sa:
             deny = 1
-        
+        elif user == realuser:
+            passwd = getpass.getpass("Password: ")
+        elif user != default_ma_user or user != realuser:
+            print "Invalid user"
+            sys.exit(1)
+        else:
+            user = default_ma_user
+            passwd = default_de_password
+
     if deny:
         print "You have no right to access this IP, please contact the machine administrator."
         sys.exit(1)
